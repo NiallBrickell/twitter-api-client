@@ -32,10 +32,13 @@ class Media(BaseModel):
     display_url: str
     expanded_url: str
     id: int
-    media_url: str
+    height: int
+    width: int
+    url: str
     original_info: dict
     type: str
     features: dict
+    alt: typing.Optional[str] = None
 
     @property
     def original_url(self):
@@ -80,13 +83,13 @@ class VideoMeta(BaseModel):
 
 @dataclasses.dataclass
 class ExtendedMedia(Media):
-    ext_media_availability: dict
+    ext_media_availability: typing.Optional[dict] = None
     # Not available on newer twitter
     ext_media_color: typing.Optional[dict] = None
     data_info: typing.Optional[dict] = None
     # Video Only?
     additional_media_info: typing.Optional[dict] = None
-    # features: typing.Optional[dict] = None
+    preview_image_url: typing.Optional[str] = None
 
     @property
     def video_meta(self) -> typing.Optional[VideoMeta]:
@@ -112,6 +115,7 @@ class ExtendedMedia(Media):
 class TombTweet(BaseModel):
     id: int
     user: NoneType = None
+    text: typing.Optional[str] = None
 
 
 @dataclasses.dataclass
@@ -121,16 +125,19 @@ class TweetMetrics(BaseModel):
     reply_count: typing.Optional[int] = None
     quote_count: typing.Optional[int] = None
     bookmark_count: typing.Optional[int] = None
+    view_count: typing.Optional[int] = None
 
 
 @dataclasses.dataclass
 class Tweet(BaseModel):
     id: int
     id_str: str
+    in_reply_to_status_id_str: typing.Optional[str]
+    in_reply_to_user_id_str: typing.Optional[str]
     created_at: datetime.datetime
 
     text: str
-    links: typing.List[str]
+    urls: typing.List[str]
     author: "User"
     public_metrics: TweetMetrics
     conversation_id: int
@@ -138,9 +145,8 @@ class Tweet(BaseModel):
     source: str  # May not exist anymore
     media: typing.Optional[typing.List["Media"]] = None
     extended_media: typing.Optional[typing.List["ExtendedMedia"]] = None
-    retweeted_tweet: typing.Optional["Tweet"] = None
-    quoted_tweet: typing.Optional["Tweet"] = None
-    urls: typing.Optional[typing.List] = None
+    retweeted_status: typing.Optional["Tweet"] = None
+    quoted_status: typing.Optional["Tweet"] = None
 
 
 @dataclasses.dataclass

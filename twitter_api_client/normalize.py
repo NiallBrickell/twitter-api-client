@@ -63,7 +63,7 @@ class UtilBox:
         return User(
             username=username,
             description=description,
-            id=user_id,
+            id=int(user_id),
             link_url=link_url,
             name=displayname,
             public_metrics=metrics,
@@ -83,142 +83,154 @@ class UtilBox:
 
     @staticmethod
     def common_tweet(
-        true_tweet: dict, entry_globals: typing.Optional[dict], recurse: bool = True
+        true_tweet: dict, entry_globals: typing.Optional[dict],
     ):
-        try:
-            if true_tweet.get('tweet'):
-                true_tweet = true_tweet['tweet']
-            if entry_globals:
-                user_result = {}
-                user_result["legacy"] = entry_globals["users"][str(true_tweet["user_id"])]
-                user_result["legacy"]["id"] = str(true_tweet["user_id"])
-                base_tweet = true_tweet
-            else:
-                user_result = true_tweet["core"]["user_results"]["result"]
-                user_result["legacy"]["id"] = true_tweet["core"]["user_results"]["result"][
-                    "rest_id"
-                ]
-                # print("rest_id:", true_tweet["core"]["user_results"]["result"]["rest_id"])
-                base_tweet = true_tweet["legacy"]
-            if entry_globals:
-                quoted_tweet = entry_globals["tweets"].get(
-                    str(base_tweet.get("quoted_status_id", "-1")), None
-                )
-                retweeted_tweet = entry_globals["tweets"].get(
-                    str(base_tweet.get("retweeted_status_id", "-1")), None
-                )
-            else:
-                quoted_tweet = true_tweet.get("quoted_status_result", {}).get(
-                    "result", None
-                ) or base_tweet.get("quoted_status_result", {}).get(
-                    "result", None
-                ) 
-                retweeted_tweet = true_tweet.get("retweeted_status_result", {}).get(
-                    "result", None
-                ) or base_tweet.get("retweeted_status_result", {}).get(
-                    "result", None
-                ) 
-            if recurse and quoted_tweet:
-                quoted_tweet = UtilBox.common_tweet(
-                    quoted_tweet, entry_globals, recurse=False
-                )
-            if recurse and retweeted_tweet:
-                retweeted_tweet = UtilBox.common_tweet(
-                    retweeted_tweet, entry_globals, recurse=False
-                )
-            user = UtilBox.make_user(user_result)
-
-            text = base_tweet.get("full_text", "")
-
-            medias = base_tweet.get("extended_entities", {}).get("media", [])
-            urls = base_tweet.get("entities", {}).get("urls", [])
-            conversation_id = int(base_tweet.get("conversation_id_str", {}))
-            reply_count = base_tweet.get("reply_count")
-            retweet_count = base_tweet.get("retweet_count")
-            like_count = base_tweet.get("favorite_count")
-            quote_count = base_tweet.get("quote_count")
-            bookmark_count = base_tweet.get("bookmark_count")
-            lang = base_tweet.get("lang")
-
-            for link in urls:
-                text = text.replace(link["url"], link["expanded_url"])
-
-            spl_content: list[str] = text.split(" ")
-            if spl_content[-1].startswith("https://t.co") and len(medias) > 0:
-                spl_content.pop(-1)
-            text = " ".join(spl_content)
-
-            wrapped_media_regular = []
-            wrapped_media_extended = []
-
-            for media in base_tweet.get("entities", {}).get("media", []):
-                set_media = Media(
-                    display_url=media["display_url"],
-                    expanded_url=media["expanded_url"],
-                    features=media.get("features", {}),
-                    id=int(media["id_str"]),
-                    media_url=media["media_url_https"],
-                    type=media["type"],
-                    original_info=media["original_info"],
-                )
-                wrapped_media_regular.append(set_media)
-
-            for extended_media in medias:
-                set_media = ExtendedMedia(
-                    display_url=extended_media["display_url"],
-                    expanded_url=extended_media["expanded_url"],
-                    ext_media_availability=extended_media["ext_media_availability"],
-                    ext_media_color=extended_media.get("ext_media_color"),
-                    features=extended_media.get("features", {}),
-                    id=int(extended_media["id_str"]),
-                    media_url=extended_media["media_url_https"],
-                    type=extended_media["type"],
-                    original_info=extended_media["original_info"],
-                )
-                if set_media.type == "video":
-                    set_media.data_info = extended_media["video_info"]
-                    set_media.features = extended_media.get("features", None)
-                # Animated gifs are just videos. (Thanks twitter)
-                elif set_media.type == "animated_gif":
-                    set_media.data_info = extended_media["video_info"]
-                    set_media.features = extended_media.get("features", None)
-                elif set_media.type != "photo":
-                    raise Exception(
-                        f"Unknown type: {set_media.type}@{int(base_tweet['id_str'])}"
-                    )
-                wrapped_media_extended.append(set_media)
-
-            source = base_tweet.get("source", "")
-            if source:
-                source = source.replace("\\/", "/")
-                source = re.sub("<[^<]+?>", "", source)
-
-            metrics = TweetMetrics(
-                retweet_count=retweet_count,
-                like_count=like_count,
-                reply_count=reply_count,
-                quote_count=quote_count,
-                bookmark_count=bookmark_count,
+        if true_tweet['__typename'] == 'TweetTombstone':
+            # user doesn't exist anymore etc.
+            return None
+        if true_tweet.get('tweet'):
+            true_tweet = true_tweet['tweet']
+        if entry_globals:
+            user_result = {}
+            user_result["legacy"] = entry_globals["users"][str(true_tweet["user_id"])]
+            user_result["legacy"]["id"] = str(true_tweet["user_id"])
+            base_tweet = true_tweet
+        else:
+            user_result = true_tweet["core"]["user_results"]["result"]
+            user_result["legacy"]["id"] = true_tweet["core"]["user_results"]["result"][
+                "rest_id"
+            ]
+            # print("rest_id:", true_tweet["core"]["user_results"]["result"]["rest_id"])
+            base_tweet = true_tweet["legacy"]
+        if entry_globals:
+            quoted_tweet = entry_globals["tweets"].get(
+                str(base_tweet.get("quoted_status_id", "-1")), None
             )
-            return Tweet(
-                id=int(base_tweet["id_str"]),
-                id_str=base_tweet['id_str'],
-                created_at=base_tweet["created_at"],
-                text=text,
-                links=urls,
-                author=user,
-                public_metrics=metrics,
-                conversation_id=conversation_id,
-                language=lang,
-                source=source,
-                media=wrapped_media_regular,
-                extended_media=wrapped_media_extended,
-                retweeted_tweet=retweeted_tweet,
-                quoted_tweet=quoted_tweet,
+            retweeted_tweet = entry_globals["tweets"].get(
+                str(base_tweet.get("retweeted_status_id", "-1")), None
             )
-        except Exception as e:
-            import pdb; pdb.set_trace()
-            pass
+        else:
+            quoted_tweet = true_tweet.get("quoted_status_result", {}).get(
+                "result", None
+            ) or base_tweet.get("quoted_status_result", {}).get(
+                "result", None
+            ) 
+            retweeted_tweet = true_tweet.get("retweeted_status_result", {}).get(
+                "result", None
+            ) or base_tweet.get("retweeted_status_result", {}).get(
+                "result", None
+            )
+
+        if quoted_tweet:
+            quoted_tweet = UtilBox.common_tweet(
+                quoted_tweet, entry_globals,
+            )
+        if retweeted_tweet:
+            retweeted_tweet = UtilBox.common_tweet(
+                retweeted_tweet, entry_globals,
+            )
+        user = UtilBox.make_user(user_result)
+
+        text = base_tweet.get("full_text", "")
+
+        medias = base_tweet.get("extended_entities", {}).get("media", [])
+        urls = base_tweet.get("entities", {}).get("urls", [])
+        conversation_id = int(base_tweet.get("conversation_id_str", {}))
+        reply_count = base_tweet.get("reply_count")
+        retweet_count = base_tweet.get("retweet_count")
+        like_count = base_tweet.get("favorite_count")
+        quote_count = base_tweet.get("quote_count")
+        bookmark_count = base_tweet.get("bookmark_count")
+        view_count = true_tweet.get("views", {}).get("count", None)
+        lang = base_tweet.get("lang")
+
+        for link in urls:
+            text = text.replace(link["url"], link["expanded_url"])
+
+        spl_content: list[str] = text.split(" ")
+        if spl_content[-1].startswith("https://t.co") and len(medias) > 0:
+            spl_content.pop(-1)
+        text = " ".join(spl_content)
+
+        media_objs = {}
+        for media in base_tweet.get("entities", {}).get("media", []):
+            set_media = Media(
+                display_url=media["display_url"],
+                expanded_url=media["expanded_url"],
+                features=media.get("features", {}),
+                id=int(media["id_str"]),
+                url=media["media_url_https"],
+                type=media["type"],
+                width=media['original_info']['width'],
+                height=media['original_info']['height'],
+                original_info=media["original_info"],
+            )
+            media_objs[set_media.id] = set_media
+
+        for extended_media in medias:
+            set_media = ExtendedMedia(
+                display_url=extended_media["display_url"],
+                expanded_url=extended_media["expanded_url"],
+                ext_media_availability=extended_media["ext_media_availability"],
+                ext_media_color=extended_media.get("ext_media_color"),
+                features=extended_media.get("features", {}),
+                id=int(extended_media["id_str"]),
+                url=extended_media["media_url_https"],
+                type=extended_media["type"],
+                alt=extended_media.get('ext_alt_text'),
+                width=media['original_info']['width'],
+                height=media['original_info']['height'],
+                original_info=extended_media["original_info"],
+            )
+            if set_media.type == "video":
+                set_media.data_info = extended_media["video_info"]
+                set_media.features = extended_media.get("features", None)
+                set_media.preview_image_url = set_media.url
+                set_media.expanded_url = extended_media["video_info"]['variants'][0]['url']
+            # Animated gifs are just videos. (Thanks twitter)
+            elif set_media.type == "animated_gif":
+                set_media.data_info = extended_media["video_info"]
+                set_media.features = extended_media.get("features", None)
+                set_media.preview_image_url = set_media.url
+                set_media.expanded_url = extended_media["video_info"]['variants'][0]['url']
+            elif set_media.type != "photo":
+                raise Exception(
+                    f"Unknown type: {set_media.type}@{int(base_tweet['id_str'])}"
+                )
+            media_objs[set_media.id] = set_media
+
+        media_objs = list(media_objs.values())
+
+        source = base_tweet.get("source", "")
+        if source:
+            source = source.replace("\\/", "/")
+            source = re.sub("<[^<]+?>", "", source)
+
+        metrics = TweetMetrics(
+            retweet_count=retweet_count,
+            like_count=like_count,
+            reply_count=reply_count,
+            quote_count=quote_count,
+            bookmark_count=int(bookmark_count) if bookmark_count is not None else None,
+            view_count=int(view_count) if view_count is not None else None,
+        )
+        return Tweet(
+            id=int(base_tweet["id_str"]),
+            id_str=base_tweet["id_str"],
+            in_reply_to_status_id_str=base_tweet.get('in_reply_to_status_id_str'),
+            in_reply_to_user_id_str=base_tweet.get('in_reply_to_user_id_str'),
+            created_at=base_tweet["created_at"],
+            text=text,
+            urls=urls,
+            author=user,
+            public_metrics=metrics,
+            conversation_id=conversation_id,
+            language=lang,
+            source=source,
+            media=media_objs,
+            retweeted_status=retweeted_tweet,
+            quoted_status=quoted_tweet,
+        )
 
     @staticmethod
     def iter_timeline_data(
@@ -426,8 +438,9 @@ def get_instructions(inner_data: dict):
         else:
             # typename contains error
             raise TwitterAPIError(f"{result['__typename']} {result.get('reason')}")
+    if inner_data.get('threaded_conversation_with_injections_v2'):
+        return inner_data['threaded_conversation_with_injections_v2']
 
-    print(inner_data)
 
 def normalize_resp(data: dict):
     inner_data: dict = data.get("data", {})
