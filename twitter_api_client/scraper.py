@@ -1,11 +1,9 @@
 import asyncio
-import logging.config
+import logging
 import math
 import platform
-import random
 
 import aiofiles
-import websockets
 from httpx import AsyncClient, Limits, ReadTimeout, URL
 from tqdm.asyncio import tqdm_asyncio
 
@@ -13,13 +11,6 @@ from .constants import *
 from .login import login
 from .util import *
 
-try:
-    if get_ipython().__class__.__name__ == 'ZMQInteractiveShell':
-        import nest_asyncio
-
-        nest_asyncio.apply()
-except:
-    ...
 
 if platform.system() != 'Windows':
     try:
@@ -30,15 +21,27 @@ if platform.system() != 'Windows':
         ...
 
 
+logger = logging.getLogger(__name__)
+
+
 class Scraper:
-    def __init__(self, email: str = None, username: str = None, password: str = None, session: Client = None, **kwargs):
+    def __init__(self, email: str = None, username: str = None, password: str = None, session: Client = None, client_kwargs: dict = {}, **kwargs):
         self.guest = False
-        self.logger = self._init_logger(kwargs.get('log_config', False))
         self.session = self._validate_session(email, username, password, session, **kwargs)
         self.debug = kwargs.get('debug', 0)
         self.save = kwargs.get('save', True)
         self.pbar = kwargs.get('pbar', True)
         self.out_path = Path('data')
+        self.client = self.create_client(client_kwargs)
+
+    def create_client(self, client_kwargs):
+        limits = Limits(max_connections=100, max_keepalive_connections=10)
+        headers = self.session.headers if self.guest else get_headers(self.session)
+        cookies = self.session.cookies
+        return AsyncClient(limits=limits, headers=headers, cookies=cookies, timeout=20, **client_kwargs)
+
+    async def aclose(self):
+        return await self.client.aclose()
 
     def users(self, screen_names: list[str], **kwargs) -> list[dict]:
         """
@@ -259,11 +262,10 @@ class Scraper:
                 [urls.append([url, video]) for video in hq_videos]
 
         async def process():
-            async with AsyncClient(headers=self.session.headers, cookies=self.session.cookies) as client:
-                tasks = (download(client, x, y) for x, y in urls)
-                if self.pbar:
-                    return await tqdm_asyncio.gather(*tasks, desc='Downloading media')
-                return await asyncio.gather(*tasks)
+            tasks = (download(self.client, x, y) for x, y in urls)
+            if self.pbar:
+                return await tqdm_asyncio.gather(*tasks, desc='Downloading media')
+            return await asyncio.gather(*tasks)
 
         async def download(client: AsyncClient, post_url: str, cdn_url: str) -> None:
             name = urlsplit(post_url).path.replace('/', '_')[1:]
@@ -274,7 +276,7 @@ class Scraper:
                     for chunk in r.iter_bytes(chunk_size=chunk_size):
                         await fp.write(chunk)
             except Exception as e:
-                self.logger.error(f'[{RED}error{RESET}] Failed to download media: {post_url} {e}')
+                logger.error('Failed to download media: {post_url} {e}')
 
         asyncio.run(process())
 
@@ -293,18 +295,18 @@ class Scraper:
                 trends = find_key(r.json(), 'item')
                 return {t['content']['trend']['name']: t for t in trends}
             except Exception as e:
-                self.logger.error(f'[{RED}error{RESET}] Failed to get trends\n{e}')
+                logger.error('Failed to get trends: %s', e)
 
         async def process():
             url = set_qs('https://twitter.com/i/api/2/guide.json', trending_params)
             offsets = utc or ["-1200", "-1100", "-1000", "-0900", "-0800", "-0700", "-0600", "-0500", "-0400", "-0300",
                               "-0200", "-0100", "+0000", "+0100", "+0200", "+0300", "+0400", "+0500", "+0600", "+0700",
                               "+0800", "+0900", "+1000", "+1100", "+1200", "+1300", "+1400"]
-            async with AsyncClient(headers=get_headers(self.session)) as client:
-                tasks = (get_trends(client, o, url) for o in offsets)
-                if self.pbar:
-                    return await tqdm_asyncio.gather(*tasks, desc='Getting trends')
-                return await asyncio.gather(*tasks)
+
+            tasks = (get_trends(self.client, o, url) for o in offsets)
+            if self.pbar:
+                return await tqdm_asyncio.gather(*tasks, desc='Getting trends')
+            return await asyncio.gather(*tasks)
 
         trends = asyncio.run(process())
         out = self.out_path / 'raw' / 'trends'
@@ -377,7 +379,7 @@ class Scraper:
             r = await client.get(url, params=params)
             return r.json()
         except Exception as e:
-            self.logger.error(f'stream not available for playback\n{e}')
+            logger.error(f'stream not available for playback: {e}')
 
     async def _init_chat(self, client: AsyncClient, chat_token: str) -> dict:
         payload = {'chat_token': chat_token}  # stream['chatToken']
@@ -406,7 +408,7 @@ class Scraper:
                 data = r.json()
                 res.append(data)
             except ReadTimeout as e:
-                self.logger.debug(f'End of chat data\n{e}')
+                logger.debug(f'End of chat data: {e}')
                 break
 
         parsed = []
@@ -417,7 +419,7 @@ class Scraper:
                     msg['payload'] = orjson.loads(msg.get('payload', '{}'))
                     msg['payload']['body'] = orjson.loads(msg['payload'].get('body'))
                 except Exception as e:
-                    self.logger.error(f'Failed to parse chat message\n{e}')
+                    logger.error(f'Failed to parse chat message: {e}')
             parsed.extend(messages)
         return parsed
 
@@ -435,7 +437,7 @@ class Scraper:
             url = '/'.join(location.split('/')[:-1])
             return [f'{url}/{chunk}' for chunk in chunks]
         except Exception as e:
-            self.logger.error(f'Failed to get chunks\n{e}')
+            logger.error(f'Failed to get chunks: {e}')
 
     def _get_chat_data(self, keys: list[dict]) -> list[dict]:
         async def get(c: AsyncClient, key: dict) -> dict:
@@ -451,14 +453,10 @@ class Scraper:
 
         async def process():
             (self.out_path / 'raw').mkdir(parents=True, exist_ok=True)
-            limits = Limits(max_connections=100, max_keepalive_connections=10)
-            headers = self.session.headers if self.guest else get_headers(self.session)
-            cookies = self.session.cookies
-            async with AsyncClient(limits=limits, headers=headers, cookies=cookies, timeout=20) as c:
-                tasks = (get(c, key) for key in keys)
-                if self.pbar:
-                    return await tqdm_asyncio.gather(*tasks, desc='Downloading chat data')
-                return await asyncio.gather(*tasks)
+            tasks = (get(self.client, key) for key in keys)
+            if self.pbar:
+                return await tqdm_asyncio.gather(*tasks, desc='Downloading chat data')
+            return await asyncio.gather(*tasks)
 
         return asyncio.run(process())
 
@@ -468,16 +466,12 @@ class Scraper:
             return rest_id, r
 
         async def process(data: list[dict]) -> list:
-            limits = Limits(max_connections=100, max_keepalive_connections=10)
-            headers = self.session.headers if self.guest else get_headers(self.session)
-            cookies = self.session.cookies
-            async with AsyncClient(limits=limits, headers=headers, cookies=cookies, timeout=20) as c:
-                tasks = []
-                for d in data:
-                    tasks.extend([get(c, chunk, d['rest_id']) for chunk in d['chunks']])
-                if self.pbar:
-                    return await tqdm_asyncio.gather(*tasks, desc='Downloading audio')
-                return await asyncio.gather(*tasks)
+            tasks = []
+            for d in data:
+                tasks.extend([get(self.client, chunk, d['rest_id']) for chunk in d['chunks']])
+            if self.pbar:
+                return await tqdm_asyncio.gather(*tasks, desc='Downloading audio')
+            return await asyncio.gather(*tasks)
 
         chunks = asyncio.run(process(data))
         streams = {}
@@ -499,11 +493,7 @@ class Scraper:
             return {'space': space, 'stream': stream}
 
         async def process():
-            limits = Limits(max_connections=100, max_keepalive_connections=10)
-            headers = self.session.headers if self.guest else get_headers(self.session)
-            cookies = self.session.cookies
-            async with AsyncClient(limits=limits, headers=headers, cookies=cookies, timeout=20) as c:
-                return await asyncio.gather(*(get(c, key) for key in keys))
+            return await asyncio.gather(*(get(self.client, key) for key in keys))
 
         return asyncio.run(process())
 
@@ -511,7 +501,7 @@ class Scraper:
         keys, qid, name = operation
         # stay within rate-limits
         if (l := len(queries)) > 500:
-            self.logger.warning(f'Got {l} queries, truncating to first 500.')
+            logger.warning(f'Got {l} queries, truncating to first 500.')
             queries = list(queries)[:500]
 
         if all(isinstance(q, dict) for q in queries):
@@ -532,20 +522,16 @@ class Scraper:
         }
         r = await client.get(f'https://twitter.com/i/api/graphql/{qid}/{name}', params=build_params(params))
         if self.debug:
-            log(self.logger, self.debug, r)
+            logger.debug(r)
         if self.save:
             save_json(r, self.out_path, name, **kwargs)
         return r
 
     async def _process(self, operation: tuple, queries: list[dict], **kwargs):
-        limits = Limits(max_connections=100, max_keepalive_connections=10)
-        headers = self.session.headers if self.guest else get_headers(self.session)
-        cookies = self.session.cookies
-        async with AsyncClient(limits=limits, headers=headers, cookies=cookies, timeout=20) as c:
-            tasks = (self._paginate(c, operation, **q, **kwargs) for q in queries)
-            if self.pbar:
-                return await tqdm_asyncio.gather(*tasks, desc=operation[-1])
-            return await asyncio.gather(*tasks)
+        tasks = (self._paginate(self.client, operation, **q, **kwargs) for q in queries)
+        if self.pbar:
+            return await tqdm_asyncio.gather(*tasks, desc=operation[-1])
+        return await asyncio.gather(*tasks)
 
     async def _paginate(self, client: AsyncClient, operation: tuple, **kwargs):
         limit = kwargs.pop('limit', math.inf)
@@ -558,166 +544,29 @@ class Scraper:
             res = []
             ids = set()
         else:
-            try:
-                r = await self._query(client, operation, **kwargs)
-                initial_data = r.json()
-                res = [r]
-                # ids = get_ids(initial_data, operation) # todo
-                ids = set(find_key(initial_data, 'rest_id'))
-                cursor = get_cursor(initial_data)
-            except Exception as e:
-                self.logger.error('Failed to get initial pagination data', e)
-                return
+            r = await self._query(client, operation, **kwargs)
+            initial_data = r.json()
+            res = [r]
+            # ids = get_ids(initial_data, operation) # todo
+            ids = set(find_key(initial_data, 'rest_id'))
+            cursor = get_cursor(initial_data)
         while (dups < DUP_LIMIT) and cursor:
             prev_len = len(ids)
             if prev_len >= limit:
                 break
-            try:
-                r = await self._query(client, operation, cursor=cursor, **kwargs)
-                data = r.json()
-            except Exception as e:
-                self.logger.error(f'Failed to get pagination data\n{e}')
-                return
+            r = await self._query(client, operation, cursor=cursor, **kwargs)
+            data = r.json()
             cursor = get_cursor(data)
             # ids |= get_ids(data, operation) # todo
             ids |= set(find_key(data, 'rest_id'))
             if self.debug:
-                self.logger.debug(f'Unique results: {len(ids)}\tcursor: {cursor}')
+                logger.debug(f'Unique results: {len(ids)}\tcursor: {cursor}')
             if prev_len == len(ids):
                 dups += 1
             res.append(r)
         if is_resuming:
             return res, cursor
         return res
-
-    async def _space_listener(self, chat: dict, frequency: int):
-        rand_color = lambda: random.choice([RED, GREEN, RESET, BLUE, CYAN, MAGENTA, YELLOW])
-        uri = f"wss://{URL(chat['endpoint']).host}/chatapi/v1/chatnow"
-        with open('chatlog.jsonl', 'ab') as fp:
-            async with websockets.connect(uri) as ws:
-                await ws.send(orjson.dumps({
-                    "payload": orjson.dumps({"access_token": chat['access_token']}).decode(),
-                    "kind": 3
-                }).decode())
-                await ws.send(orjson.dumps({
-                    "payload": orjson.dumps({
-                        "body": orjson.dumps({
-                            "room": chat['room_id']
-                        }).decode(),
-                        "kind": 1
-                    }).decode(),
-                    "kind": 2
-                }).decode())
-
-                prev_message = ''
-                prev_user = ''
-                while True:
-                    msg = await ws.recv()
-                    temp = orjson.loads(msg)
-                    kind = temp.get('kind')
-                    if kind == 1:
-                        signature = temp.get('signature')
-                        payload = orjson.loads(temp.get('payload'))
-                        payload['body'] = orjson.loads(payload.get('body'))
-                        res = {
-                            'kind': kind,
-                            'payload': payload,
-                            'signature': signature,
-                        }
-                        fp.write(orjson.dumps(res) + b'\n')
-                        body = payload['body']
-                        message = body.get('body')
-                        user = body.get('username')
-                        # user_id = body.get('user_id')
-                        final = body.get('final')
-
-                        if frequency == 1:
-                            if final:
-                                if user != prev_user:
-                                    print()
-                                    print(f"({rand_color()}{user}{RESET})")
-                                    prev_user = user
-                                # print(message, end=' ')
-                                print(message)
-
-                        # dirty
-                        if frequency == 2:
-                            if user and (not final):
-                                if user != prev_user:
-                                    print()
-                                    print(f"({rand_color()}{user}{RESET})")
-                                    prev_user = user
-                                new_message = re.sub(f'^({prev_message})', '', message, flags=re.I).strip()
-                                if len(new_message) < 100:
-                                    print(new_message, end=' ')
-                                    prev_message = message
-
-    async def _get_live_chats(self, client: Client, spaces: list[dict]):
-        async def get(c: AsyncClient, space: dict) -> list[dict]:
-            media_key = space['data']['audioSpace']['metadata']['media_key']
-            r = await c.get(
-                url=f'https://twitter.com/i/api/1.1/live_video_stream/status/{media_key}',
-                params={
-                    'client': 'web',
-                    'use_syndication_guest_id': 'false',
-                    'cookie_set_host': 'twitter.com',
-                })
-            r = await c.post(
-                url='https://proxsee.pscp.tv/api/v2/accessChatPublic',
-                json={'chat_token': r.json()['chatToken']}
-            )
-            return r.json()
-
-        limits = Limits(max_connections=100)
-        async with AsyncClient(headers=client.headers, limits=limits, timeout=30) as c:
-            tasks = (get(c, _id) for _id in spaces)
-            if self.pbar:
-                return await tqdm_asyncio.gather(*tasks, desc='Getting live transcripts')
-            return await asyncio.gather(*tasks)
-
-    def space_live_transcript(self, room: str, frequency: int = 1):
-        """
-        Log live transcript of a space
-
-        @param room: room id
-        @param frequency: granularity of transcript. 1 for real-time, 2 for post-processed or "finalized" transcript
-        @return: None
-        """
-
-        async def get(spaces: list[dict]):
-            client = init_session()
-            chats = await self._get_live_chats(client, spaces)
-            await asyncio.gather(*(self._space_listener(c, frequency) for c in chats))
-
-        spaces = self.spaces(rooms=[room])
-        asyncio.run(get(spaces))
-
-    def spaces_live(self, rooms: list[str]):
-        """
-        Capture live audio stream from spaces
-
-        Limited to 500 rooms per IP, as defined by twitter's rate limits.
-
-        @param rooms: list of room ids
-        @return: None
-        """
-        chunk_idx = lambda chunk: re.findall('_(\d+)_\w\.aac', chunk)[0]
-        sort_chunks = lambda chunks: sorted(chunks, key=lambda x: int(chunk_idx(x)))
-        parse_chunks = lambda txt: re.findall('\n(chunk_.*)\n', txt, flags=re.I)
-
-        async def get_m3u8(client: AsyncClient, space: dict) -> dict:
-            try:
-                media_key = space['data']['audioSpace']['metadata']['media_key']
-                r = await client.get(
-                    url=f'https://twitter.com/i/api/1.1/live_video_stream/status/{media_key}',
-                    params={'client': 'web', 'use_syndication_guest_id': 'false', 'cookie_set_host': 'twitter.com'}
-                )
-                data = r.json()
-                room = data['shareUrl'].split('/')[-1]
-                return {"url": data['source']['location'], "room": room}
-            except Exception as e:
-                room = space['data']['audioSpace']['metadata']['rest_id']
-                self.logger.error(f'Failed to get stream info for https://twitter.com/i/spaces/{room}\n{e}')
 
         async def get_chunks(client: AsyncClient, url: str) -> list[str]:
             try:
@@ -730,62 +579,13 @@ class Scraper:
                 base = '/'.join(str(url).split('/')[:-1])
                 return [f'{base}/{c}' for c in parse_chunks(r.text)]
             except Exception as e:
-                self.logger.error(f'Failed to get chunks\n{e}')
-
-        async def poll_space(client: AsyncClient, space: dict) -> dict | None:
-            curr = 0
-            lim = 10
-            all_chunks = set()
-            playlist = await get_m3u8(client, space)
-            if not playlist: return
-            chunks = await get_chunks(client, playlist['url'])
-            if not chunks: return
-            out = self.out_path / 'live'
-            out.mkdir(parents=True, exist_ok=True)
-            async with aiofiles.open(out / f'{playlist["room"]}.aac', 'wb') as fp:
-                while curr < lim:
-                    chunks = await get_chunks(client, playlist['url'])
-                    if not chunks:
-                        return {'space': space, 'chunks': sort_chunks(all_chunks)}
-                    new_chunks = set(chunks) - all_chunks
-                    all_chunks |= new_chunks
-                    for c in sort_chunks(new_chunks):
-                        try:
-                            self.logger.debug(f"write: chunk [{chunk_idx(c)}]\t{c}")
-                            r = await client.get(c)
-                            await fp.write(r.content)
-                        except Exception as e:
-                            self.logger.error(f'Failed to write chunk {c}\n{e}')
-                    curr = 0 if new_chunks else curr + 1
-                    # wait for new chunks. dynamic playlist is updated every 2-3 seconds
-                    await asyncio.sleep(random.random() + 1.5)
-            return {'space': space, 'chunks': sort_chunks(all_chunks)}
+                logger.error(f'Failed to get chunks: {e}')
 
         async def process(spaces: list[dict]):
-            limits = Limits(max_connections=100)
-            headers, cookies = self.session.headers, self.session.cookies
-            async with AsyncClient(limits=limits, headers=headers, cookies=cookies, timeout=20) as c:
-                return await asyncio.gather(*(poll_space(c, space) for space in spaces))
+            return await asyncio.gather(*(poll_space(self.client, space) for space in spaces))
 
         spaces = self.spaces(rooms=rooms)
         return asyncio.run(process(spaces))
-
-    @staticmethod
-    def _init_logger(cfg: dict) -> Logger:
-        if cfg:
-            logging.config.dictConfig(cfg)
-        else:
-            logging.config.dictConfig(LOGGER_CONFIG)
-
-        # only support one logger
-        logger_name = list(LOGGER_CONFIG['loggers'].keys())[0]
-
-        # set level of all other loggers to ERROR
-        for name in logging.root.manager.loggerDict:
-            if name != logger_name:
-                logging.getLogger(name).setLevel(logging.ERROR)
-
-        return logging.getLogger(logger_name)
 
     def _validate_session(self, *args, **kwargs):
         email, username, password, session = args
@@ -795,6 +595,6 @@ class Scraper:
         if not session:
             # no session provided, log-in to authenticate
             return login(email, username, password, **kwargs)
-        self.logger.warning(f'{RED}This is a guest session, some endpoints cannot be accessed.{RESET}\n')
+        logger.warning('This is a guest session, some endpoints cannot be accessed.')
         self.guest = True
         return session

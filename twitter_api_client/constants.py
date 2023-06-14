@@ -19,38 +19,6 @@ WHITE = '\x1b[37m'
 BOLD = '\x1b[1m'
 RESET = '\x1b[0m'
 
-LOGGER_CONFIG = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'standard': {
-            'format': '%(asctime)s.%(msecs)03d [%(levelname)s] :: %(message)s',
-            'datefmt': '%Y-%m-%d %H:%M:%S'
-        },
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'level': 'DEBUG',
-            'formatter': 'standard',
-            'stream': 'ext://sys.stdout',
-        },
-        'file': {
-            'class': 'logging.FileHandler',
-            'level': 'DEBUG',
-            'formatter': 'standard',
-            'filename': 'twitter.log',
-            'mode': 'a',
-        },
-    },
-    'loggers': {
-        'twitter': {
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
-        }
-    }
-}
-
 ID_MAP = {
     'Followers': '^user-\d+$',
     'Following': '^user-\d+$',

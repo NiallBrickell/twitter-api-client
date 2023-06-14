@@ -1,5 +1,5 @@
 import asyncio
-import logging.config
+import logging
 import math
 import platform
 import random
@@ -16,6 +16,8 @@ from .util import set_qs, get_headers, find_key
 
 reset = '\u001b[0m'
 colors = [f'\u001b[{i}m' for i in range(30, 38)]
+
+logger = logging.getLogger(__name__)
 
 try:
     if get_ipython().__class__.__name__ == 'ZMQInteractiveShell':
@@ -35,12 +37,15 @@ if platform.system() != 'Windows':
 
 
 class Search:
-    def __init__(self, email: str = None, username: str = None, password: str = None, session: Client = None, **kwargs):
-        self.logger = self._init_logger(kwargs.get('log_config', False))
+    def __init__(self, email: str = None, username: str = None, password: str = None, session: Client = None, client_kwargs: dict = {}, **kwargs):
         self.session = self._validate_session(email, username, password, session, **kwargs)
         self.api = 'https://api.twitter.com/2/search/adaptive.json?'
         self.save = kwargs.get('save', True)
         self.debug = kwargs.get('debug', 0)
+        self.client = AsyncClient(headers=get_headers(self.session), **client_kwargs)
+
+    async def aclose(self):
+        return await self.client.aclose()
 
     def run(self, *args, out: str = 'data', **kwargs):
         out_path = self.make_output_dirs(out)
@@ -49,8 +54,7 @@ class Search:
         return asyncio.run(self.process(args, search_config, out_path, **kwargs))
 
     async def process(self, queries: tuple, config: dict, out: Path, **kwargs) -> list:
-        async with AsyncClient(headers=get_headers(self.session)) as s:
-            return await asyncio.gather(*(self.paginate(q, s, config, out, **kwargs) for q in queries))
+        return await asyncio.gather(*(self.paginate(q, self.client, config, out, **kwargs) for q in queries))
 
     async def paginate(self, query: str, session: AsyncClient, config: dict, out: Path, **kwargs) -> list[dict]:
         config['q'] = query
@@ -62,11 +66,11 @@ class Search:
             ids |= set(data['globalObjects']['tweets'])
             if len(ids) >= kwargs.get('limit', math.inf):
                 if self.debug:
-                    self.logger.debug(
-                        f'[{GREEN}success{RESET}] Returned {len(ids)} search results for {c}{query}{reset}')
+                    logger.debug(
+                        f'Returned {len(ids)} search results for {query}')
                 return all_data
             if self.debug:
-                self.logger.debug(f'{c}{query}{reset}')
+                logger.debug(f'{query}')
             config['cursor'] = next_cursor
 
             data, next_cursor = await self.backoff(lambda: self.get(session, config), query, **kwargs)
@@ -94,12 +98,12 @@ class Search:
             except Exception as e:
                 if i == retries:
                     if self.debug:
-                        self.logger.debug(f'Max retries exceeded\n{e}')
+                        logger.debug(f'Max retries exceeded: {e}')
                     return None, None
                 t = 2 ** i + random.random()
                 if self.debug:
-                    self.logger.debug(
-                        f'No data for: {BOLD}{info}{RESET}, retrying in {f"{t:.2f}"} seconds\t\t{e}')
+                    logger.debug(
+                        f'No data for: {info}, retrying in {f"{t:.2f}"} seconds: {e}')
                 time.sleep(t)
 
     async def get(self, session: AsyncClient, params: dict) -> tuple:
@@ -125,7 +129,7 @@ class Search:
                         return entry['content']['operation']['cursor']['value']
         except Exception as e:
             if self.debug:
-                self.logger.debug(e)
+                logger.debug(e)
 
     def make_output_dirs(self, path: str) -> Path:
         p = Path(f'{path}')
@@ -133,23 +137,6 @@ class Search:
         (p / 'processed').mkdir(parents=True, exist_ok=True)
         (p / 'final').mkdir(parents=True, exist_ok=True)
         return p
-
-    @staticmethod
-    def _init_logger(cfg: dict) -> Logger:
-        if cfg:
-            logging.config.dictConfig(cfg)
-        else:
-            logging.config.dictConfig(LOGGER_CONFIG)
-
-        # only support one logger
-        logger_name = list(LOGGER_CONFIG['loggers'].keys())[0]
-
-        # set level of all other loggers to ERROR
-        for name in logging.root.manager.loggerDict:
-            if name != logger_name:
-                logging.getLogger(name).setLevel(logging.ERROR)
-
-        return logging.getLogger(logger_name)
 
     @staticmethod
     def _validate_session(*args, **kwargs):

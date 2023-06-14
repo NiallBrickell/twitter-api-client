@@ -5,17 +5,16 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlencode, urlunsplit, parse_qs, quote
 
 import orjson
-# import protonmail
 from httpx import Response, Client
 
 from .constants import GREEN, MAGENTA, RED, RESET, ID_MAP
 
 
-def init_session():
+def init_session(client_kwargs={}):
     client = Client(headers={
         'authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
-    }, follow_redirects=True)
+    }, follow_redirects=True, **client_kwargs)
     r = client.post('https://api.twitter.com/1.1/guest/activate.json').json()
     client.headers.update({
         'content-type': 'application/json',
@@ -104,22 +103,30 @@ def get_cursor(data: list | dict) -> str:
                 return content['value']  # v1 cursor
 
 
+def get_headers_from_cookies(cookies: dict, headers={}, **kwargs) -> dict:
+    """
+    Get the headers required for authenticated requests
+    """
+    headers = {
+        'authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
+        'cookie': '; '.join(f'{k}={v}' for k, v in cookies.items()),
+        'referer': 'https://twitter.com/',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
+        'x-csrf-token': cookies.get('ct0', ''),
+        'x-guest-token': cookies.get('guest_token', ''),
+        'x-twitter-auth-type': 'OAuth2Session' if cookies.get('auth_token') else '',
+        'x-twitter-active-user': 'yes',
+        'x-twitter-client-language': 'en',
+        **headers,
+    }
+    return dict(sorted({k.lower(): v for k, v in headers.items()}.items()))
+
+
 def get_headers(session, **kwargs) -> dict:
     """
     Get the headers required for authenticated requests
     """
-    headers = kwargs | {
-        'authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
-        'cookie': '; '.join(f'{k}={v}' for k, v in session.cookies.items()),
-        'referer': 'https://twitter.com/',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
-        'x-csrf-token': session.cookies.get('ct0', ''),
-        'x-guest-token': session.cookies.get('guest_token', ''),
-        'x-twitter-auth-type': 'OAuth2Session' if session.cookies.get('auth_token') else '',
-        'x-twitter-active-user': 'yes',
-        'x-twitter-client-language': 'en',
-    }
-    return dict(sorted({k.lower(): v for k, v in headers.items()}.items()))
+    return get_headers_from_cookies(dict(session.cookie), **kwargs)
 
 
 def find_key(obj: any, key: str) -> list:
@@ -209,83 +216,84 @@ def get_ids(data: list | dict, operation: tuple) -> set:
     expr = ID_MAP[operation[-1]]
     return {k for k in find_key(data, 'entryId') if re.search(expr, k)}
 
-# def init_protonmail_session(email: str, password: str) -> protonmail.api.Session:
-#     """
-#     Create an authenticated Proton Mail session
-#
-#     @param email: your email. Can also use username
-#     @param password: your password
-#     @return: Proton Mail Session object
-#     """
-#     cwd = Path.cwd()
-#     log_dir_path = cwd / 'protonmail_log'
-#     cache_dir_path = cwd / 'protonmail_cache'
-#     try:
-#         session = protonmail.api.Session(
-#             api_url="https://api.protonmail.ch",
-#             log_dir_path=log_dir_path,
-#             cache_dir_path=cache_dir_path,
-#             user_agent="Ubuntu_20.04",
-#             tls_pinning=False,
-#         )
-#         session.enable_alternative_routing = False
-#         session.authenticate(email, password)
-#         return session
-#     except Exception as e:
-#         print('Failed to initialize Proton Mail Session:', e)
-#
-#
-# def get_inbox(session: protonmail.api.Session) -> dict:
-#     """
-#     Get inbox
-#
-#     @param session: Proton Mail Session object
-#     @return: inbox data
-#     """
-#     try:
-#         return session.api_request(
-#             "/api/mail/v4/conversations",
-#             method="GET",
-#             params={
-#                 'Page': 0,
-#                 'PageSize': 50,
-#                 'Limit': 100,
-#                 'LabelID': 0,
-#                 'Sort': 'Time',
-#                 'Desc': 1,
-#             }
-#         )
-#     except Exception as e:
-#         print('Failed to get inbox:', e)
-#
-#
-# def get_verification_code(inbox: dict) -> str:
-#     """
-#     Get Twitter verification code from inbox.
-#
-#     Crude implementation. Subject line contains verification code, no need to decrypt message body.
-#
-#     @param inbox: inbox data
-#     @return: Twitter verification code
-#     """
-#     try:
-#         expr = '(\w+) is your Twitter verification code'
-#         return list(filter(len, (re.findall(expr, conv['Subject']) for conv in inbox['Conversations'])))[0][0]
-#     except Exception as e:
-#         print('Failed to get Twitter verification code:', e)
-#
-#
-# def get_confirmation_code(inbox: dict) -> str:
-#     """
-#     Get Twitter confirmation code from inbox.
-#
-#     Crude implementation. Subject line contains confirmation code, no need to decrypt message body.
-#
-#     @param inbox: inbox data
-#     @return: Twitter confirmation code
-#     """
-#     try:
-#         expr = 'Your Twitter confirmation code is (\w+)'
-#         return list(filter(len, (re.findall(expr, conv['Subject']) for conv in inbox['Conversations'])))[0][0]
-#     except Exception as e:
-#         print('Failed to get Twitter confirmation code:', e)
+def init_protonmail_session(email: str, password: str):
+    """
+    Create an authenticated Proton Mail session
+
+    @param email: your email. Can also use username
+    @param password: your password
+    @return: Proton Mail Session object
+    """
+    cwd = Path.cwd()
+    log_dir_path = cwd / 'protonmail_log'
+    cache_dir_path = cwd / 'protonmail_cache'
+    try:
+        from proton.api import Session
+        session = Session(
+            api_url="https://api.protonmail.ch",
+            log_dir_path=log_dir_path,
+            cache_dir_path=cache_dir_path,
+            user_agent="Ubuntu_20.04",
+            tls_pinning=False,
+        )
+        session.enable_alternative_routing = False
+        session.authenticate(email, password)
+        return session
+    except Exception as e:
+        print('Failed to initialize Proton Mail Session:', e)
+
+
+def get_inbox(session) -> dict:
+    """
+    Get inbox
+
+    @param session: Proton Mail Session object
+    @return: inbox data
+    """
+    try:
+        return session.api_request(
+            "/api/mail/v4/conversations",
+            method="GET",
+            params={
+                'Page': 0,
+                'PageSize': 50,
+                'Limit': 100,
+                'LabelID': 0,
+                'Sort': 'Time',
+                'Desc': 1,
+            }
+        )
+    except Exception as e:
+        print('Failed to get inbox:', e)
+
+
+def get_verification_code(inbox: dict) -> str:
+    """
+    Get Twitter verification code from inbox.
+
+    Crude implementation. Subject line contains verification code, no need to decrypt message body.
+
+    @param inbox: inbox data
+    @return: Twitter verification code
+    """
+    try:
+        expr = '(\w+) is your Twitter verification code'
+        return list(filter(len, (re.findall(expr, conv['Subject']) for conv in inbox['Conversations'])))[0][0]
+    except Exception as e:
+        print('Failed to get Twitter verification code:', e)
+
+
+def get_confirmation_code(inbox: dict) -> str:
+    """
+    Get Twitter confirmation code from inbox.
+
+    Crude implementation. Subject line contains confirmation code, no need to decrypt message body.
+
+    @param inbox: inbox data
+    @return: Twitter confirmation code
+    """
+    try:
+        expr = 'Your Twitter confirmation code is (\w+)'
+        return list(filter(len, (re.findall(expr, conv['Subject']) for conv in inbox['Conversations'])))[0][0]
+    except Exception as e:
+        print('Failed to get Twitter confirmation code:', e)

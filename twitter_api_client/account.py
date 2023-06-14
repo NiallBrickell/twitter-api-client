@@ -1,5 +1,5 @@
 import hashlib
-import logging.config
+import logging
 import math
 import mimetypes
 import platform
@@ -14,6 +14,8 @@ from tqdm import tqdm
 from .constants import *
 from .login import login
 from .util import *
+
+logger = logging.getLogger(__name__)
 
 try:
     if get_ipython().__class__.__name__ == 'ZMQInteractiveShell':
@@ -35,7 +37,6 @@ if platform.system() != 'Windows':
 class Account:
 
     def __init__(self, email: str = None, username: str = None, password: str = None, session: Client = None, **kwargs):
-        self.logger = self._init_logger(kwargs.get('log_config', False))
         self.session = self._validate_session(email, username, password, session, **kwargs)
         self.save = kwargs.get('save', True)
         self.debug = kwargs.get('debug', 0)
@@ -60,7 +61,7 @@ class Account:
             **data
         )
         if self.debug:
-            log(self.logger, self.debug, r)
+            logger.debug(r)
         return r.json()
 
     def v1(self, path: str, params: dict) -> dict:
@@ -68,7 +69,7 @@ class Account:
         headers['content-type'] = 'application/x-www-form-urlencoded'
         r = self.session.post(f'{self.v1_api}/{path}', headers=headers, data=urlencode(params))
         if self.debug:
-            log(self.logger, self.debug, r)
+            logger.debug(r)
         return r.json()
 
     def create_poll(self, text: str, choices: list[str], poll_duration: int) -> dict:
@@ -101,7 +102,7 @@ class Account:
             variables['message']['text'] = {'text': text}
         res = self.gql('POST', Operation.useSendMessageMutation, variables)
         if find_key(res, 'dm_validation_failure_type'):
-            self.logger.debug(f"{RED}Failed to send DM(s) to {receivers}{RESET}")
+            logger.debug(f"Failed to send DM(s) to {receivers}")
         return res
 
     def tweet(self, text: str, *, media: any = None, **kwargs) -> dict:
@@ -437,7 +438,7 @@ class Account:
             ids |= set(find_key(data, 'rest_id'))
 
             if self.debug:
-                self.logger.debug(f'cursor: {cursor}\tunique results: {len(ids)}')
+                logger.debug(f'cursor: {cursor}\tunique results: {len(ids)}')
 
             if prev_len == len(ids):
                 dups += 1
@@ -508,16 +509,16 @@ class Account:
                         _headers = {b'content-type': b'multipart/form-data; boundary=----WebKitFormBoundary' + pad}
                         r = self.session.post(url=url, headers=headers | _headers, params=params, content=data)
                     except Exception as e:
-                        self.logger.error(f'Failed to upload chunk, trying alternative method\n{e}')
+                        logger.error(f'Failed to upload chunk, trying alternative method: {e}')
                         try:
                             files = {'media': chunk}
                             r = self.session.post(url=url, headers=headers, params=params, files=files)
                         except Exception as e:
-                            self.logger.error(f'Failed to upload chunk\n{e}')
+                            logger.error(f'Failed to upload chunk: {e}')
                             return
 
                     if r.status_code < 200 or r.status_code > 299:
-                        self.logger.debug(f'{RED}{r.status_code} {r.text}{RESET}')
+                        logger.debug(f'{r.status_code} {r.text}')
 
                     i += 1
                     pbar.update(fp.tell() - pbar.n)
@@ -527,27 +528,27 @@ class Account:
             params |= {'original_md5': hashlib.md5(file.read_bytes()).hexdigest()}
         r = self.session.post(url=url, headers=headers, params=params)
         if r.status_code == 400:
-            self.logger.debug(f'{RED}{r.status_code} {r.text}{RESET}')
+            logger.debug(f'{r.status_code} {r.text}')
             return
 
-        # self.logger.debug(f'processing, please wait...')
+        # logger.debug(f'processing, please wait...')
         processing_info = r.json().get('processing_info')
         while processing_info:
             state = processing_info['state']
             if error := processing_info.get("error"):
-                self.logger.debug(f'{RED}{error}{RESET}')
+                logger.debug(f'{error}')
                 return
             if state == MEDIA_UPLOAD_SUCCEED:
                 break
             if state == MEDIA_UPLOAD_FAIL:
-                self.logger.debug(f'{RED}{r.status_code} {r.text} {RESET}')
+                logger.debug(f'{r.status_code} {r.text}')
                 return
             check_after_secs = processing_info.get('check_after_secs', random.randint(1, 5))
             time.sleep(check_after_secs)
             params = {'command': 'STATUS', 'media_id': media_id}
             r = self.session.get(url=url, headers=headers, params=params)
             processing_info = r.json().get('processing_info')
-        # self.logger.debug('processing complete')
+        # logger.debug('processing complete')
         return media_id
 
     def _add_alt_text(self, media_id: int, text: str) -> Response:
@@ -555,23 +556,6 @@ class Account:
         url = f'{self.v1_api}/media/metadata/create.json'
         r = self.session.post(url, headers=get_headers(self.session), json=params)
         return r
-
-    @staticmethod
-    def _init_logger(cfg: dict) -> Logger:
-        if cfg:
-            logging.config.dictConfig(cfg)
-        else:
-            logging.config.dictConfig(LOGGER_CONFIG)
-
-        # only support one logger
-        logger_name = list(LOGGER_CONFIG['loggers'].keys())[0]
-
-        # set level of all other loggers to ERROR
-        for name in logging.root.manager.loggerDict:
-            if name != logger_name:
-                logging.getLogger(name).setLevel(logging.ERROR)
-
-        return logging.getLogger(logger_name)
 
     @staticmethod
     def _validate_session(*args, **kwargs):

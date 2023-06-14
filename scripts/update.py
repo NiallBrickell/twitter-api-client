@@ -1,5 +1,5 @@
 import asyncio
-import logging.config
+import logging
 import platform
 import re
 import subprocess
@@ -35,8 +35,7 @@ JS_FILES_MAP = Path('js.json')
 JS_FILES = Path('js')
 OPERATIONS = Path('operations')
 JS_FILES.mkdir(exist_ok=True, parents=True)
-logging.config.dictConfig(LOGGER_CONFIG)
-logger = logging.getLogger('twitter')
+logger = logging.getLogger(__name__)
 
 
 def find_api_script(res: Response) -> str:

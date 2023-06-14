@@ -1,9 +1,11 @@
+from time import time
 import sys
 
 from httpx import Client
 
 from .constants import GREEN, YELLOW, RED, BOLD, RESET
-from .util import find_key  # ,get_confirmation_code, get_inbox, init_protonmail_session
+from .util import find_key, get_confirmation_code, get_inbox, init_protonmail_session
+from .errors import TwitterLoginError
 
 
 def update_token(client: Client, key: str, url: str, **kwargs) -> Client:
@@ -27,10 +29,10 @@ def update_token(client: Client, key: str, url: str, **kwargs) -> Client:
                 if task['enter_text']['hint_text'].casefold() == 'confirmation code':
                     print(f"[{YELLOW}warning{RESET}] email confirmation code challenge.")
                     client.cookies.set('confirmation_code', 'true')
-
         client.cookies.set(key, info[key])
 
     except KeyError as e:
+        raise TwitterLoginError(f'{caller_name}: {e}')
         client.cookies.set('flow_errors', 'true')  # signal that an error occurred somewhere in the flow
         print(f'[{RED}error{RESET}] failed to update token at {BOLD}{caller_name}{RESET}\n{e}')
     return client
@@ -109,26 +111,26 @@ def confirm_email(client: Client) -> Client:
     })
 
 
-# def solve_confirmation_challenge(client: Client, email: str, password: str) -> Client:
-#     proton_session = init_protonmail_session(email, password)
-#     inbox = get_inbox(proton_session)
-#     confirmation_code = get_confirmation_code(inbox)
-#     print(f'{confirmation_code = }')
-#     return update_token(client, 'flow_token', 'https://api.twitter.com/1.1/onboarding/task.json', json={
-#         "flow_token": client.cookies.get('flow_token'),
-#         'subtask_inputs': [
-#             {
-#                 'subtask_id': 'LoginAcid',
-#                 'enter_text': {
-#                     'text': confirmation_code,
-#                     'link': 'next_link',
-#                 },
-#             },
-#         ],
-#     })
+def solve_confirmation_challenge(client: Client, email: str, password: str) -> Client:
+    proton_session = init_protonmail_session(email, password)
+    inbox = get_inbox(proton_session)
+    confirmation_code = get_confirmation_code(inbox)
+    print(f'{confirmation_code = }')
+    return update_token(client, 'flow_token', 'https://api.twitter.com/1.1/onboarding/task.json', json={
+        "flow_token": client.cookies.get('flow_token'),
+        'subtask_inputs': [
+            {
+                'subtask_id': 'LoginAcid',
+                'enter_text': {
+                    'text': confirmation_code,
+                    'link': 'next_link',
+                },
+            },
+        ],
+    })
 
 
-def execute_login_flow(client: Client) -> Client | None:
+def execute_login_flow(client: Client, protonmail_creds: dict = {}) -> Client | None:
     client = init_guest_token(client)
     for fn in [flow_start, flow_instrumentation, flow_username, flow_password, flow_duplication_check]:
         client = fn(client)
@@ -138,19 +140,14 @@ def execute_login_flow(client: Client) -> Client | None:
         client = confirm_email(client)
 
     # # solve confirmation challenge (Proton Mail only)
-    # if client.cookies.get('confirmation_code') == 'true':
-    #     if not client.protonmail:
-    #         print(f'[{RED}warning{RESET}] Please check your email for a confirmation code'
-    #               f' and log in again using the web app. If you wish to automatically solve'
-    #               f' email confirmation challenges, add a Proton Mail account in your account settings')
-    #         return
-    #     time.sleep(10)  # todo: just poll the inbox until it arrives instead of waiting
-    #     client = solve_confirmation_challenge(client, *client.protonmail.values())
+    if client.cookies.get('confirmation_code') == 'true':
+        time.sleep(10)  # todo: just poll the inbox until it arrives instead of waiting
+        client = solve_confirmation_challenge(client, **protonmail_creds)
 
     return client
 
 
-def login(email: str, username: str, password: str, **kwargs) -> Client:
+def login(email: str, username: str, password: str, client_kwargs: dict = {}, protonmail_creds: dict = {}, client_headers={}, **kwargs) -> Client:
     client = Client(
         cookies={
             "email": email,
@@ -162,14 +159,17 @@ def login(email: str, username: str, password: str, **kwargs) -> Client:
         headers={
             'authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
             'content-type': 'application/json',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
             'x-twitter-active-user': 'yes',
             'x-twitter-client-language': 'en',
-        })
+            **client_headers,
+        },
+        **client_kwargs
+    )
 
     # client.protonmail = kwargs.get('protonmail')
 
-    client = execute_login_flow(client)
+    client = execute_login_flow(client, protonmail_creds)
     if kwargs.get('debug'):
         if not client or client.cookies.get('flow_errors') == 'true':
             print(f'[{RED}error{RESET}] {BOLD}{username}{RESET} login failed')
