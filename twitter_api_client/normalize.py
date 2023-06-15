@@ -437,7 +437,7 @@ def get_instructions(inner_data: dict):
             return result['timeline']['timeline']
         else:
             # typename contains error
-            raise TwitterAPIError(f"{result['__typename']} {result.get('reason')}")
+            raise TwitterAPIError(f"{result['__typename']}{' '+result['reason'] if result.get('reason') else ''}")
     if inner_data.get('threaded_conversation_with_injections_v2'):
         return inner_data['threaded_conversation_with_injections_v2']
 
@@ -446,6 +446,10 @@ def normalize_resp(data: dict):
     inner_data: dict = data.get("data", {})
     
     instructions = get_instructions(inner_data)
+    if instructions is None:
+        # likely an 'errors' field in data that will be handled
+        instructions = {}
     cursor = {}
     
-    return list(UtilBox.iter_timeline_data(instructions, cursor))
+    res = list(UtilBox.iter_timeline_data(instructions, cursor))
+    return [r for r in res if r]
