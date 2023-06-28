@@ -148,6 +148,10 @@ class Tweet(BaseModel):
     retweeted_status: typing.Optional["Tweet"] = None
     quoted_status: typing.Optional["Tweet"] = None
 
+    in_reply_to_status_id = typing.Optional[int] = None
+    quoted_status_id = typing.Optional[int] = None
+    retweeted_status_id = typing.Optional[int] = None
+
 
 @dataclasses.dataclass
 class UserMetrics(BaseModel):
@@ -169,6 +173,7 @@ class User(BaseModel):
     is_blue_verified: bool
     can_dm: bool
     url: str
+    source: str
     name: typing.Optional[str] = None
     verified_type: typing.Optional[str] = None  # Includes Verified type
     created_at: typing.Optional[datetime.datetime] = None

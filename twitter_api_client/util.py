@@ -1,6 +1,7 @@
 import re
 import time
 from logging import Logger
+import logging
 from pathlib import Path
 from urllib.parse import urlsplit, urlencode, urlunsplit, parse_qs, quote
 
@@ -10,12 +11,22 @@ from httpx import Response, Client
 from .constants import GREEN, MAGENTA, RED, RESET, ID_MAP
 
 
-def init_session(client_kwargs={}):
+log_ = logging.getLogger(__name__)
+
+def init_session(client_kwargs={}, attempts = 0):
     client = Client(headers={
         'authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
     }, follow_redirects=True, **client_kwargs)
-    r = client.post('https://api.twitter.com/1.1/guest/activate.json').json()
+    res = client.post('https://api.twitter.com/1.1/guest/activate.json')
+    if res.status_code != 200:
+        log_.info('Hit %s when attempting to activate guest token (%s)', res.status_code, res.text)
+        import pdb; pdb.set_trace()
+        if attempts < 3:
+            log_.info('Retrying...')
+            return init_session(client_kwargs, attempts + 1)
+        raise ValueError(f'Hit {res.status_code} when attempting to activate guest token ({res.text})')
+    r = res.json()
     client.headers.update({
         'content-type': 'application/json',
         'x-guest-token': r['guest_token'],

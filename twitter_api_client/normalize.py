@@ -1,6 +1,7 @@
 # Adapted from twitter-redgalaxy-client
 import re
 import typing
+from datetime import datetime, timezone
 
 from .models import (
     TombTweet,
@@ -60,6 +61,11 @@ class UtilBox:
         if isinstance(user_id, str):
             user_id = int(user_id)
 
+        created_at = datetime.strptime(
+            user_data["created_at"],
+            "%a %b %d %H:%M:%S +0000 %Y",
+        ).replace(tzinfo=timezone.utc).isoformat()
+
         return User(
             username=username,
             description=description,
@@ -76,9 +82,10 @@ class UtilBox:
             verified_type=None
             if not user_data["verified"]
             else user_data.get("verified_type", "Legacy"),
-            created_at=user_data["created_at"],
+            created_at=created_at,
             location=user_data.get("location", None),
             protected=False,  # probably lol
+            source="unofficial",
         )
 
     @staticmethod
@@ -206,6 +213,11 @@ class UtilBox:
             source = source.replace("\\/", "/")
             source = re.sub("<[^<]+?>", "", source)
 
+        created_at = datetime.strptime(
+            base_tweet["created_at"],
+            "%a %b %d %H:%M:%S +0000 %Y",
+        ).replace(tzinfo=timezone.utc).isoformat()
+
         metrics = TweetMetrics(
             retweet_count=retweet_count,
             like_count=like_count,
@@ -214,22 +226,27 @@ class UtilBox:
             bookmark_count=int(bookmark_count) if bookmark_count is not None else None,
             view_count=int(view_count) if view_count is not None else None,
         )
+        quoted_status_id = base_tweet.get("quoted_status_id")
+        retweeted_status_id = base_tweet.get("retweeted_status_id")
         return Tweet(
             id=int(base_tweet["id_str"]),
             id_str=base_tweet["id_str"],
             in_reply_to_status_id_str=base_tweet.get('in_reply_to_status_id_str'),
             in_reply_to_user_id_str=base_tweet.get('in_reply_to_user_id_str'),
-            created_at=base_tweet["created_at"],
+            in_reply_to_status_id=int(base_tweet.get('in_reply_to_status_id_str')),
+            quoted_status_id=int(quoted_status_id),
+            retweeted_status_id=int(retweeted_status_id),
+            created_at=created_at,
             text=text,
             urls=urls,
             author=user,
             public_metrics=metrics,
             conversation_id=conversation_id,
             language=lang,
-            source=source,
             media=media_objs,
             retweeted_status=retweeted_tweet,
             quoted_status=quoted_tweet,
+            source="unofficial",
         )
 
     @staticmethod
